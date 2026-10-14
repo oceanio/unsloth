@@ -34,6 +34,8 @@ from core.inference.openai_responses_shared import (
 )
 from core.inference.sse_control_frames import sanitize_provider_sse_line
 from models.providers import (
+    CUSTOM_REASONING_EFFORT_LEVELS,
+    custom_reasoning_effort_levels,
     normalize_provider_reasoning_config,
     validate_provider_reasoning_contract,
 )
@@ -1504,6 +1506,15 @@ def _build_kimi_tool_end(
     )
 
 
+def _default_custom_reasoning_effort(levels: tuple[str, ...]) -> str:
+    """Medium when the ladder offers it, else the nearest rung below, else the weakest."""
+    if "medium" in levels:
+        return "medium"
+    rank = CUSTOM_REASONING_EFFORT_LEVELS.index("medium")
+    below = [level for level in levels if CUSTOM_REASONING_EFFORT_LEVELS.index(level) < rank]
+    return below[-1] if below else levels[0]
+
+
 def _apply_custom_reasoning_controls(
     body: dict[str, Any],
     config: Optional[dict],
@@ -1514,14 +1525,11 @@ def _apply_custom_reasoning_controls(
     if not config or not config["enabled"]:
         return
     off = enable_thinking is False or reasoning_effort == "none"
+    levels = custom_reasoning_effort_levels(config)
     # Explicit off must still reach the server when a previous model left a wider effort level.
-    if (
-        not off
-        and reasoning_effort is not None
-        and reasoning_effort not in {"low", "medium", "high"}
-    ):
+    if not off and reasoning_effort is not None and reasoning_effort not in levels:
         return
-    effort = "none" if off else (reasoning_effort or "medium")
+    effort = "none" if off else (reasoning_effort or _default_custom_reasoning_effort(levels))
     style = config["style"]
     if style == "reasoning_effort":
         body["reasoning_effort"] = effort

@@ -37,14 +37,19 @@ BAD = [
     {"enabled": True, "style": "thinking", "extra": 1},
     {"style": "thinking"},
     ["thinking"],
+    {"enabled": True, "style": "reasoning_effort", "effort_levels": []},
+    {"enabled": True, "style": "reasoning_effort", "effort_levels": ["none"]},
+    {"enabled": True, "style": "reasoning_effort", "effort_levels": ["ultra"]},
+    {"enabled": True, "style": "thinking", "effort_levels": ["high"]},
 ]
 KEYS = {"reasoning_effort", "reasoning", "thinking", "chat_template_kwargs", "enable_thinking"}
 PROVIDER = {"provider_type": "custom", "display_name": "Gateway"}
 CHAT = {"messages": [{"role": "user", "content": "hi"}], "model": "test-model"}
 
 
-def config(style = "reasoning_effort", enabled = True):
-    return {"enabled": enabled, "style": style}
+def config(style = "reasoning_effort", enabled = True, levels = None):
+    value = {"enabled": enabled, "style": style}
+    return value if levels is None else {**value, "effort_levels": levels}
 
 
 def expected(style, effort = "medium"):
@@ -311,3 +316,41 @@ def test_responses_legacy_semantics(harness):
     ]
     assert bodies[0] == bodies[1]
     assert bodies[0]["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+@pytest.mark.parametrize("style", ["reasoning_effort", "reasoning"])
+def test_effort_levels_schema_and_persistence(harness, style):
+    h = harness
+    ladder = config(style, levels = ["xhigh", "high", "xhigh"])
+    assert ProviderCreate(**PROVIDER, reasoning_config = ladder).model_dump()["reasoning_config"] == (
+        config(style, levels = ["high", "xhigh"])
+    )
+    # An unset ladder stays off the wire, so pre-ladder rows and clients see the old shape.
+    plain = ProviderCreate(**PROVIDER, reasoning_config = config(style)).model_dump()
+    assert "effort_levels" not in plain["reasoning_config"]
+    created = h.api("POST", status = 201, **PROVIDER, base_url = h.url, reasoning_config = ladder)
+    assert created["reasoning_config"] == config(style, levels = ["high", "xhigh"])
+    providers_db.reset_schema_state_for_tests()
+    assert providers_db.get_provider(created["id"])["reasoning_config"] == created["reasoning_config"]
+    updated = h.api("PUT", f"/{created['id']}", reasoning_config = config(style))
+    assert updated["reasoning_config"] == config(style)
+    assert providers_db.get_provider(created["id"])["reasoning_config"] == config(style)
+
+
+@pytest.mark.parametrize("style", ["reasoning_effort", "reasoning"])
+@pytest.mark.parametrize("mode", ["client", "route"])
+def test_effort_levels_wire(harness, style, mode):
+    cfg = config(style, levels = ["high", "xhigh", "max"])
+    for controls, effort in [
+        ({}, "high"),
+        ({"enable_thinking": True}, "high"),
+        ({"enable_thinking": False}, "none"),
+        ({"reasoning_effort": "none"}, "none"),
+        *[({"reasoning_effort": e}, e) for e in ("high", "xhigh", "max")],
+        ({"reasoning_effort": "medium"}, None),
+        ({"reasoning_effort": "low"}, None),
+    ]:
+        body = harness.send(mode, cfg, **controls)
+        assert reasoning(body) == (expected(style, effort) if effort else {}), controls
+    body = harness.send(mode, config(style, levels = ["minimal", "low"]))
+    assert reasoning(body) == expected(style, "low")

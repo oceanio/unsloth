@@ -5,9 +5,23 @@
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 ProviderApiType = Literal["chat_completions", "responses", "systemone"]
+
+# Weakest -> strongest effort rungs a Custom endpoint may opt into ("none" is the Off row, always offered).
+CUSTOM_REASONING_EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "max")
+DEFAULT_CUSTOM_REASONING_EFFORT_LEVELS = ("low", "medium", "high")
+CUSTOM_REASONING_EFFORT_STYLES = frozenset({"reasoning_effort", "reasoning"})
 
 
 class ProviderReasoningConfig(BaseModel):
@@ -19,6 +33,38 @@ class ProviderReasoningConfig(BaseModel):
     style: Literal[
         "reasoning_effort", "reasoning", "thinking", "chat_template_kwargs.enable_thinking"
     ]
+    # Absent means DEFAULT_CUSTOM_REASONING_EFFORT_LEVELS. Only effort styles carry a ladder.
+    effort_levels: Optional[
+        list[Literal["minimal", "low", "medium", "high", "xhigh", "max"]]
+    ] = None
+
+    @field_validator("effort_levels")
+    @classmethod
+    def _canonical_levels(cls, levels):
+        if levels is None:
+            return None
+        if not levels:
+            raise ValueError("effort_levels must list at least one level.")
+        return [level for level in CUSTOM_REASONING_EFFORT_LEVELS if level in levels]
+
+    @model_validator(mode = "after")
+    def _levels_need_effort_style(self):
+        if self.effort_levels is not None and self.style not in CUSTOM_REASONING_EFFORT_STYLES:
+            raise ValueError(f"effort_levels does not apply to the {self.style} style.")
+        return self
+
+    @model_serializer(mode = "wrap")
+    def _omit_default_levels(self, handler):
+        # Keep unset ladders off the wire and out of storage, so pre-ladder rows round-trip unchanged.
+        data = handler(self)
+        if data.get("effort_levels") is None:
+            data.pop("effort_levels", None)
+        return data
+
+
+def custom_reasoning_effort_levels(config: Optional[dict]) -> tuple[str, ...]:
+    levels = (config or {}).get("effort_levels")
+    return tuple(levels) if levels else DEFAULT_CUSTOM_REASONING_EFFORT_LEVELS
 
 
 def normalize_provider_reasoning_config(value) -> Optional[dict]:

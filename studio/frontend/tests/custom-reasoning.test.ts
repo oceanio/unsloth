@@ -257,3 +257,69 @@ test("switching same-model connections never leaks the contract and server sync 
     globalThis.fetch = original;
   }
 });
+
+test("an effort ladder drives the menu and the wire, and malformed ladders fail closed", () => {
+  for (const style of ["reasoning_effort", "reasoning"] as const) {
+    const config = { enabled: true, style, effort_levels: ["xhigh", "high"] };
+    const normalized = reasoning.normalizeCustomReasoningConfig(config);
+    assert.deepEqual(normalized, { ...config, effort_levels: ["high", "xhigh"] });
+    assert.deepEqual(
+      [
+        ...caps.getExternalReasoningCapabilities("custom", "same-model", {
+          reasoningConfig: normalized,
+        }).reasoningEffortLevels,
+      ],
+      ["none", "high", "xhigh"],
+    );
+    for (const [effort, sent] of [
+      ["xhigh", "xhigh"],
+      ["high", "high"],
+      ["none", "none"],
+      // Off the ladder: medium is absent and nothing sits below it, so the weakest rung.
+      ["medium", "high"],
+    ]) {
+      assert.deepEqual(
+        reasoning.customReasoningRequestFields(config, true, effort),
+        { reasoning_effort: sent },
+      );
+    }
+    assert.deepEqual(
+      reasoning.customReasoningRequestFields(
+        { enabled: true, style, effort_levels: ["minimal", "low"] },
+        true,
+        "max",
+      ),
+      { reasoning_effort: "low" },
+    );
+  }
+  for (const config of [
+    { enabled: true, style: "reasoning_effort", effort_levels: [] },
+    { enabled: true, style: "reasoning_effort", effort_levels: ["none"] },
+    { enabled: true, style: "reasoning_effort", effort_levels: ["ultra"] },
+    { enabled: true, style: "reasoning_effort", effort_levels: "high" },
+    { enabled: true, style: "thinking", effort_levels: ["high"] },
+  ]) {
+    assert.equal(reasoning.normalizeCustomReasoningConfig(config), undefined);
+    assert.deepEqual(
+      reasoning.customReasoningRequestFields(config, true, "high"),
+      {},
+    );
+  }
+});
+
+test("saving drops a default or inapplicable ladder so older rows keep their shape", () => {
+  const save = reasoning.customReasoningConfigForSave;
+  assert.equal(save(null), null);
+  assert.deepEqual(
+    save({ enabled: true, style: "reasoning", effort_levels: ["high", "low", "medium"] }),
+    { enabled: true, style: "reasoning" },
+  );
+  assert.deepEqual(
+    save({ enabled: true, style: "thinking", effort_levels: ["xhigh"] }),
+    { enabled: true, style: "thinking" },
+  );
+  assert.deepEqual(
+    save({ enabled: false, style: "reasoning_effort", effort_levels: ["max", "low"] }),
+    { enabled: false, style: "reasoning_effort", effort_levels: ["low", "max"] },
+  );
+});
