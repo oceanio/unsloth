@@ -36307,7 +36307,7 @@ async def _openai_catalog_with_aliases(quant_pins: bool = False) -> list[dict]:
         objects = await _openai_catalog_objects(quant_pins = True)
     else:
         objects = await _openai_catalog_objects()
-    aliases = await asyncio.to_thread(alias_model_objects, objects, _pinned_quant_row)
+    aliases = await asyncio.to_thread(alias_model_objects, objects, _alias_target_row)
     # The rewrite gives an alias precedence, so a same-named model row would never be served.
     shadowed = {row["id"].lower() for row in aliases}
     return [o for o in objects if str(o.get("id", "")).lower() not in shadowed] + aliases
@@ -36380,6 +36380,33 @@ def _pinned_quant_object(model_id: str, objects: list[dict]) -> Optional[dict]:
 def _pinned_quant_row(model_id: str, objects: list[dict]) -> Optional[dict]:
     pinned = _pinned_quant_object(model_id, objects)
     return None if pinned is None else _with_openai_residency(pinned)
+
+
+def _alias_target_row(model_id: str, objects: list[dict]) -> Optional[dict]:
+    """The row an alias target the catalog does not list stands for: a Connection model or a pin.
+
+    A Connection model (``external::<connection id>::<model>``) is never in the catalog, so an
+    alias to one is listed only while its connection is enabled and has that model checked.
+    """
+    connection = _connection_model_ref(model_id)
+    if connection is None:
+        return _pinned_quant_row(model_id, objects)
+    provider_id, external_model = connection
+    provider = providers_db.get_provider(provider_id)
+    if (
+        provider is None
+        or not provider.get("is_enabled")
+        or external_model not in (provider.get("models") or [])
+    ):
+        return None
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": int(time.time()),
+        "owned_by": provider["provider_type"],
+        # Served by the connection on demand, so never waiting on a load.
+        "loaded": True,
+    }
 
 
 def _quant_pin_object(listed: dict, variant: str, resident_quants) -> dict:
