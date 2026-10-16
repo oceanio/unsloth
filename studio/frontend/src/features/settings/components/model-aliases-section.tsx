@@ -3,6 +3,8 @@
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { buildExternalModelId } from "@/features/chat";
+import { listProviderConfigs } from "@/features/chat/api/providers-api";
 import { useT } from "@/i18n";
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -30,6 +32,9 @@ export function ModelAliasesSection() {
   const [saved, setSaved] = useState<ModelAlias[] | null>(null);
   const [draft, setDraft] = useState<ModelAlias[]>([]);
   const [modelIds, setModelIds] = useState<string[]>([]);
+  const [connectionModels, setConnectionModels] = useState<
+    { id: string; label: string }[]
+  >([]);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -61,15 +66,34 @@ export function ModelAliasesSection() {
         }
       })
       .catch(() => {});
+    // Connection models are never in /v1/models: an alias names one by the picker's
+    // external::<connection id>::<model> id, labelled so the connection is recognizable.
+    void listProviderConfigs()
+      .then((providers) => {
+        if (!cancelled) {
+          setConnectionModels(
+            providers
+              .filter((provider) => provider.is_enabled)
+              .flatMap((provider) =>
+                (provider.models ?? []).map((model) => ({
+                  id: buildExternalModelId(provider.id, model),
+                  label: `${provider.display_name} · ${model}`,
+                })),
+              ),
+          );
+        }
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [t]);
 
   const aliasNames = new Set(draft.map((a) => a.name.trim().toLowerCase()));
-  const suggestions = modelIds.filter(
-    (id) => !aliasNames.has(id.toLowerCase()),
-  );
+  const suggestions = [
+    ...modelIds.map((id) => ({ id, label: undefined })),
+    ...connectionModels,
+  ].filter(({ id }) => !aliasNames.has(id.toLowerCase()));
   const dirty = saved !== null && !sameAliases(saved, draft);
 
   const update = (index: number, patch: Partial<ModelAlias>) => {
@@ -104,8 +128,8 @@ export function ModelAliasesSection() {
       description={t("settings.general.modelAliases.description")}
     >
       <datalist id={listId}>
-        {suggestions.map((id) => (
-          <option key={id} value={id} />
+        {suggestions.map(({ id, label }) => (
+          <option key={id} value={id} label={label} />
         ))}
       </datalist>
       <div className="flex flex-col gap-2 py-3">
