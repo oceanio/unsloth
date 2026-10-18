@@ -397,7 +397,7 @@ class AddScanFolderRequest(BaseModel):
     )
     label: Optional[str] = Field(
         None,
-        max_length = 200,
+        max_length = 40,  # storage.studio_db.SCAN_FOLDER_LABEL_MAX_LENGTH
         description = 'Display name shown in place of "Custom folder", e.g. the engine that owns the folder. Omitted keeps the stored name; blank clears it.',
     )
 
@@ -407,7 +407,7 @@ class UpdateScanFolderRequest(BaseModel):
 
     label: Optional[str] = Field(
         None,
-        max_length = 200,
+        max_length = 40,  # storage.studio_db.SCAN_FOLDER_LABEL_MAX_LENGTH
         description = 'Display name shown in place of "Custom folder"; null or blank clears it',
     )
 
