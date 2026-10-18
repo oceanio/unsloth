@@ -337,20 +337,36 @@ def test_effort_levels_schema_and_persistence(harness, style):
     assert providers_db.get_provider(created["id"])["reasoning_config"] == config(style)
 
 
+def test_effort_levels_are_the_rungs_studio_already_sends():
+    from core.inference import llama_cpp
+    from models.providers import CUSTOM_REASONING_EFFORT_LEVELS
+
+    assert set(CUSTOM_REASONING_EFFORT_LEVELS) == ep._REASONING_EFFORT_LEVELS
+    assert CUSTOM_REASONING_EFFORT_LEVELS == tuple(
+        level for level in llama_cpp._REASONING_EFFORT_SCALE if level != "none"
+    )
+
+
+def endpoint_default(style):
+    """Thinking on with no level: the endpoint picks its own."""
+    return {} if style == "reasoning_effort" else {"reasoning": {"enabled": True}}
+
+
 @pytest.mark.parametrize("style", ["reasoning_effort", "reasoning"])
 @pytest.mark.parametrize("mode", ["client", "route"])
 def test_effort_levels_wire(harness, style, mode):
     cfg = config(style, levels = ["high", "xhigh", "max"])
-    for controls, effort in [
-        ({}, "high"),
-        ({"enable_thinking": True}, "high"),
-        ({"enable_thinking": False}, "none"),
-        ({"reasoning_effort": "none"}, "none"),
-        *[({"reasoning_effort": e}, e) for e in ("high", "xhigh", "max")],
-        ({"reasoning_effort": "medium"}, None),
-        ({"reasoning_effort": "low"}, None),
+    for controls, wire in [
+        # No medium to fall back on, so an unasked level is left to the endpoint.
+        ({}, endpoint_default(style)),
+        ({"enable_thinking": True}, endpoint_default(style)),
+        ({"enable_thinking": False}, expected(style, "none")),
+        ({"reasoning_effort": "none"}, expected(style, "none")),
+        *[({"reasoning_effort": e}, expected(style, e)) for e in ("high", "xhigh", "max")],
+        ({"reasoning_effort": "medium"}, {}),
+        ({"reasoning_effort": "low"}, {}),
     ]:
         body = harness.send(mode, cfg, **controls)
-        assert reasoning(body) == (expected(style, effort) if effort else {}), controls
-    body = harness.send(mode, config(style, levels = ["minimal", "low"]))
-    assert reasoning(body) == expected(style, "low")
+        assert reasoning(body) == wire, controls
+    body = harness.send(mode, config(style, levels = ["minimal", "low", "medium"]))
+    assert reasoning(body) == expected(style, "medium")

@@ -3,7 +3,7 @@
 
 """Pydantic schemas for the external LLM providers API."""
 
-from typing import Literal, Optional
+from typing import Literal, Optional, get_args
 
 from pydantic import (
     BaseModel,
@@ -18,8 +18,15 @@ from pydantic import (
 
 ProviderApiType = Literal["chat_completions", "responses", "systemone"]
 
-# Weakest -> strongest effort rungs a Custom endpoint may opt into ("none" is the Off row, always offered).
-CUSTOM_REASONING_EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "max")
+# Weakest -> strongest effort rungs a Custom endpoint may opt into: the values OpenAI documents for
+# reasoning_effort, each model taking a subset (https://developers.openai.com/api/docs/guides/reasoning),
+# minus "none", which is the Off row and always offered. Claude's effort takes low through max, no minimal.
+# The same rungs as _REASONING_EFFORT_LEVELS in core/inference/external_provider.py and, in this order,
+# _REASONING_EFFORT_SCALE in core/inference/llama_cpp.py. Importing either would pull the inference stack
+# into this schema module, so the rungs are spelled out here and a test keeps the three in step.
+CustomReasoningEffortLevel = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
+CUSTOM_REASONING_EFFORT_LEVELS: tuple[str, ...] = get_args(CustomReasoningEffortLevel)
+# The ladder a Custom connection offered before it could choose one.
 DEFAULT_CUSTOM_REASONING_EFFORT_LEVELS = ("low", "medium", "high")
 CUSTOM_REASONING_EFFORT_STYLES = frozenset({"reasoning_effort", "reasoning"})
 
@@ -34,9 +41,7 @@ class ProviderReasoningConfig(BaseModel):
         "reasoning_effort", "reasoning", "thinking", "chat_template_kwargs.enable_thinking"
     ]
     # Absent means DEFAULT_CUSTOM_REASONING_EFFORT_LEVELS. Only effort styles carry a ladder.
-    effort_levels: Optional[
-        list[Literal["minimal", "low", "medium", "high", "xhigh", "max"]]
-    ] = None
+    effort_levels: Optional[list[CustomReasoningEffortLevel]] = None
 
     @field_validator("effort_levels")
     @classmethod

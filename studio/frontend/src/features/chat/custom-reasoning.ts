@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { REASONING_EFFORT_SCALE, type ReasoningEffortLevel } from "./model-catalog";
+
 /** Explicit connection contract, never inferred from a URL or a model name. */
 export const CUSTOM_REASONING_STYLES = [
   "reasoning_effort",
@@ -9,22 +11,21 @@ export const CUSTOM_REASONING_STYLES = [
   "chat_template_kwargs.enable_thinking",
 ] as const;
 
-/** Weakest -> strongest rungs a Custom endpoint may opt into; "none" is the Off row, always offered.
- *  Must stay in sync with CUSTOM_REASONING_EFFORT_LEVELS in backend models/providers.py. */
-export const CUSTOM_REASONING_EFFORT_LEVELS = [
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export type CustomReasoningStyle = (typeof CUSTOM_REASONING_STYLES)[number];
+/** "none" is the Off row, always offered, so it is never a rung a connection opts into. */
+export type CustomReasoningEffortLevel = Exclude<ReasoningEffortLevel, "none">;
+
+/** Weakest -> strongest rungs a Custom endpoint may opt into: Studio's effort scale, which is the set
+ *  OpenAI documents for reasoning_effort (each model taking a subset), without the Off row. Claude's
+ *  effort takes low through max, no minimal. Matches CUSTOM_REASONING_EFFORT_LEVELS in backend
+ *  models/providers.py. */
+export const CUSTOM_REASONING_EFFORT_LEVELS: readonly CustomReasoningEffortLevel[] =
+  REASONING_EFFORT_SCALE.filter(
+    (level): level is CustomReasoningEffortLevel => level !== "none",
+  );
+/** The ladder a Custom connection offered before it could choose one. */
 export const DEFAULT_CUSTOM_REASONING_EFFORT_LEVELS: readonly CustomReasoningEffortLevel[] =
   ["low", "medium", "high"];
-
-export type CustomReasoningStyle = (typeof CUSTOM_REASONING_STYLES)[number];
-export type CustomReasoningEffortLevel =
-  (typeof CUSTOM_REASONING_EFFORT_LEVELS)[number];
 export type CustomReasoningConfig = {
   enabled: boolean;
   style: CustomReasoningStyle;
@@ -106,18 +107,6 @@ export function normalizeCustomReasoningConfig(
   };
 }
 
-/** Medium when the ladder offers it, else the nearest rung below, else the weakest. Matches the backend. */
-function defaultCustomReasoningEffort(
-  levels: readonly CustomReasoningEffortLevel[],
-): CustomReasoningEffortLevel {
-  if (levels.includes("medium")) return "medium";
-  const rank = CUSTOM_REASONING_EFFORT_LEVELS.indexOf("medium");
-  const below = levels.filter(
-    (level) => CUSTOM_REASONING_EFFORT_LEVELS.indexOf(level) < rank,
-  );
-  return below[below.length - 1] ?? levels[0] ?? "medium";
-}
-
 /** Studio's generic controls; the backend alone translates them to the selected wire style. */
 export function customReasoningRequestFields(
   value: unknown,
@@ -130,11 +119,16 @@ export function customReasoningRequestFields(
   const config = normalizeCustomReasoningConfig(value);
   if (!config?.enabled) return {};
   if (customReasoningStyleTakesEffort(config.style)) {
+    if (!enabled || effort === "none") return { reasoning_effort: "none" };
     const levels = customReasoningEffortLevels(config);
+    // Off the ladder, medium: what Studio sent before a connection could choose its ladder. A ladder
+    // without it sends no level, so the backend leaves it to the endpoint's own default.
     const level = levels.includes(effort as CustomReasoningEffortLevel)
       ? (effort as CustomReasoningEffortLevel)
-      : defaultCustomReasoningEffort(levels);
-    return { reasoning_effort: !enabled || effort === "none" ? "none" : level };
+      : levels.includes("medium")
+        ? "medium"
+        : undefined;
+    return level ? { reasoning_effort: level } : {};
   }
   return { thinking: { type: enabled ? "enabled" : "disabled" } };
 }

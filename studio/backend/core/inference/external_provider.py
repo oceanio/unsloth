@@ -34,7 +34,6 @@ from core.inference.openai_responses_shared import (
 )
 from core.inference.sse_control_frames import sanitize_provider_sse_line
 from models.providers import (
-    CUSTOM_REASONING_EFFORT_LEVELS,
     custom_reasoning_effort_levels,
     normalize_provider_reasoning_config,
     validate_provider_reasoning_contract,
@@ -1506,15 +1505,6 @@ def _build_kimi_tool_end(
     )
 
 
-def _default_custom_reasoning_effort(levels: tuple[str, ...]) -> str:
-    """Medium when the ladder offers it, else the nearest rung below, else the weakest."""
-    if "medium" in levels:
-        return "medium"
-    rank = CUSTOM_REASONING_EFFORT_LEVELS.index("medium")
-    below = [level for level in levels if CUSTOM_REASONING_EFFORT_LEVELS.index(level) < rank]
-    return below[-1] if below else levels[0]
-
-
 def _apply_custom_reasoning_controls(
     body: dict[str, Any],
     config: Optional[dict],
@@ -1529,12 +1519,21 @@ def _apply_custom_reasoning_controls(
     # Explicit off must still reach the server when a previous model left a wider effort level.
     if not off and reasoning_effort is not None and reasoning_effort not in levels:
         return
-    effort = "none" if off else (reasoning_effort or _default_custom_reasoning_effort(levels))
+    if off:
+        effort = "none"
+    else:
+        # Unasked, medium: what Studio sent before a connection could choose its ladder, and the default
+        # OpenAI documents for its current models. A ladder without it leaves the level to the endpoint.
+        effort = reasoning_effort or ("medium" if "medium" in levels else None)
     style = config["style"]
     if style == "reasoning_effort":
-        body["reasoning_effort"] = effort
+        if effort is not None:
+            body["reasoning_effort"] = effort
     elif style == "reasoning":
-        body["reasoning"] = {"enabled": False} if off else {"effort": effort}
+        if off:
+            body["reasoning"] = {"enabled": False}
+        else:
+            body["reasoning"] = {"effort": effort} if effort else {"enabled": True}
     elif style == "thinking":
         body["thinking"] = {"type": "disabled" if off else "enabled"}
     elif style == "chat_template_kwargs.enable_thinking":
